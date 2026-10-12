@@ -8,15 +8,20 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -69,9 +74,13 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     init {
         val saved = prefs.getString("presets", null)
         if (saved != null) {
-            val arr = JSONArray(saved)
-            for (i in 0 until arr.length()) presets.add(Preset.fromJson(arr.getJSONObject(i)))
-            sel = prefs.getInt("sel", 0).coerceIn(0, presets.lastIndex)
+            try {
+                val arr = JSONArray(saved)
+                for (i in 0 until arr.length()) presets.add(Preset.fromJson(arr.getJSONObject(i)))
+                if (presets.isNotEmpty()) sel = prefs.getInt("sel", 0).coerceIn(0, presets.lastIndex)
+            } catch (_: Exception) {
+                presets.clear()  // 存储数据损坏时回退到默认方案，避免每次启动都崩溃
+            }
         }
         if (presets.isEmpty()) {
             presets.add(Preset("引体向上", prep = 5, sets = 5, work = 40, rest = 90))
@@ -163,7 +172,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val CardBg = Color(0xFF1E1E23)
+private val TextPrimary = Color(0xFFF5F5F5)
+private val TextDim = Color(0xFF9E9E9E)
+
 @Composable
 fun TimerScreen(vm: TimerViewModel = viewModel()) {
     LocalView.current.keepScreenOn = vm.running
@@ -174,68 +186,161 @@ fun TimerScreen(vm: TimerViewModel = viewModel()) {
         Phase.WORK -> Color(0xFF2E7D32)
         Phase.REST -> Color(0xFF1565C0)
         Phase.DONE -> Color(0xFF6A1B9A)
-        Phase.IDLE -> MaterialTheme.colorScheme.background
+        Phase.IDLE -> Color(0xFF121216)
     }
 
-    Column(Modifier.fillMaxSize().background(bg).systemBarsPadding().padding(24.dp)) {
-        Column(
-            Modifier.weight(1f).fillMaxWidth().then(if (idle) Modifier.verticalScroll(rememberScrollState()) else Modifier),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = if (idle) Arrangement.Top else Arrangement.Center
-        ) {
+    Surface(Modifier.fillMaxSize(), color = bg) {
+        Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 20.dp)) {
             if (idle) {
-                val p = vm.current
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(vm.presets) { i, item ->
-                        FilterChip(selected = i == vm.sel, onClick = { vm.select(i) }, label = { Text(item.name) })
-                    }
-                    item { AssistChip(onClick = vm::addPreset, label = { Text("＋ 新建") }) }
-                }
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = p.name, onValueChange = { vm.update(p.copy(name = it)) },
-                    label = { Text("方案名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Stepper("预备(秒)", p.prep, 0, 5) { vm.update(p.copy(prep = it)) }
-                Stepper("组数", p.sets, 1, 1) { vm.update(p.copy(sets = it)) }
-                Stepper("锻炼(秒)", p.work, 5, 5) { vm.update(p.copy(work = it)) }
-                Stepper("休息(秒)", p.rest, 0, 5) { vm.update(p.copy(rest = it)) }
-                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("跳过最后一次休息", fontSize = 20.sp)
-                    Switch(checked = p.skipLastRest, onCheckedChange = { vm.update(p.copy(skipLastRest = it)) })
-                }
-                Spacer(Modifier.height(8.dp))
-                Text("总时长 ${fmt(p.totalSeconds)}", fontSize = 18.sp)
+                EditorPanel(vm, Modifier.weight(1f))
             } else {
-                Text(vm.current.name, fontSize = 20.sp)
-                Text(vm.phase.label, fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                Text(fmt(vm.remaining), fontSize = 120.sp, fontWeight = FontWeight.Bold)
-                if (vm.phase != Phase.DONE) Text("第 ${vm.round} / ${vm.current.sets} 组", fontSize = 24.sp)
+                Column(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(vm.current.name, fontSize = 22.sp, color = Color.White.copy(alpha = 0.85f))
+                    Text(vm.phase.label, fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(fmt(vm.remaining), fontSize = 120.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (vm.phase != Phase.DONE) {
+                        Text("第 ${vm.round} / ${vm.current.sets} 组", fontSize = 24.sp, color = Color.White.copy(alpha = 0.85f))
+                    }
+                }
             }
-        }
 
-        Row(Modifier.fillMaxWidth().padding(top = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)) {
-            Button(onClick = vm::toggle) {
-                Text(if (vm.running) "暂停" else if (idle || vm.phase == Phase.DONE) "开始" else "继续")
+            if (idle) {
+                Column(Modifier.padding(top = 8.dp, bottom = 12.dp)) {
+                    Button(
+                        onClick = vm::toggle,
+                        modifier = Modifier.fillMaxWidth().height(72.dp),
+                        shape = RoundedCornerShape(36.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+                    ) {
+                        Text("开始锻炼", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.weight(1f))
+                        Text(fmt(vm.current.totalSeconds), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (vm.presets.size > 1) {
+                        TextButton(onClick = vm::deletePreset, modifier = Modifier.fillMaxWidth()) {
+                            Text("删除当前方案", fontSize = 14.sp, color = TextDim)
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)
+                ) {
+                    Button(
+                        onClick = vm::toggle,
+                        modifier = Modifier.height(64.dp),
+                        shape = RoundedCornerShape(32.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+                    ) {
+                        Text(if (vm.running) "暂停" else if (vm.phase == Phase.DONE) "开始" else "继续", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    OutlinedButton(
+                        onClick = vm::reset,
+                        modifier = Modifier.height(64.dp),
+                        shape = RoundedCornerShape(32.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    ) {
+                        Text("重置", fontSize = 20.sp)
+                    }
+                }
             }
-            if (!idle) OutlinedButton(onClick = vm::reset) { Text("重置") }
-            if (idle && vm.presets.size > 1) OutlinedButton(onClick = vm::deletePreset) { Text("删除方案") }
         }
     }
 }
 
+/** 编辑页：方案选择 + 参数卡片 */
 @Composable
-fun Stepper(label: String, value: Int, min: Int, step: Int, onChange: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontSize = 20.sp)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            FilledTonalButton(onClick = { onChange((value - step).coerceAtLeast(min)) }) { Text("−") }
-            Text("$value", fontSize = 24.sp, modifier = Modifier.width(64.dp), textAlign = TextAlign.Center)
-            FilledTonalButton(onClick = { onChange(value + step) }) { Text("+") }
+private fun EditorPanel(vm: TimerViewModel, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 16.dp)) {
+        val p = vm.current
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), state = rememberLazyListState()) {
+            itemsIndexed(vm.presets) { i, item ->
+                FilterChip(selected = i == vm.sel, onClick = { vm.select(i) }, label = { Text(item.name) })
+            }
+            item { AssistChip(onClick = vm::addPreset, label = { Text("＋ 新建") }) }
         }
+        Spacer(Modifier.height(20.dp))
+        OutlinedTextField(
+            value = p.name, onValueChange = { vm.update(p.copy(name = it)) },
+            label = { Text("方案名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(20.dp))
+
+        StepperCard("组数", TextDim, "${p.sets}",
+            onMinus = { vm.update(p.copy(sets = (p.sets - 1).coerceAtLeast(1))) },
+            onPlus = { vm.update(p.copy(sets = p.sets + 1)) }
+        )
+        StepperCard("预备", Color(0xFFFFB74D), fmt(p.prep),
+            onMinus = { vm.update(p.copy(prep = (p.prep - 5).coerceAtLeast(0))) },
+            onPlus = { vm.update(p.copy(prep = p.prep + 5)) }
+        )
+        StepperCard("锻炼", Color(0xFF66BB6A), fmt(p.work),
+            onMinus = { vm.update(p.copy(work = (p.work - 5).coerceAtLeast(5))) },
+            onPlus = { vm.update(p.copy(work = p.work + 5)) }
+        )
+        StepperCard("休息", Color(0xFF64B5F6), fmt(p.rest),
+            onMinus = { vm.update(p.copy(rest = (p.rest - 5).coerceAtLeast(0))) },
+            onPlus = { vm.update(p.copy(rest = p.rest + 5)) }
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("跳过最后一次休息", fontSize = 16.sp, color = TextDim)
+                Switch(checked = p.skipLastRest, onCheckedChange = { vm.update(p.copy(skipLastRest = it)) })
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+/** 一张参数卡片：彩色标签 + 超大数值 + 左右加减 */
+@Composable
+private fun StepperCard(
+    label: String,
+    labelColor: Color,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    bottom: (@Composable ColumnScope.() -> Unit)? = null
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(bottom = 12.dp)
+            .clip(RoundedCornerShape(24.dp)).background(CardBg)
+    ) {
+        Text(
+            label, color = labelColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StepButton("−", onMinus)
+            Text(
+                value, fontSize = 52.sp, fontWeight = FontWeight.Bold, color = TextPrimary,
+                textAlign = TextAlign.Center, modifier = Modifier.weight(1f)
+            )
+            StepButton("+", onPlus)
+        }
+        if (bottom != null) bottom()
+    }
+}
+
+@Composable
+private fun StepButton(symbol: String, onClick: () -> Unit) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(64.dp).clip(CircleShape).clickable(onClick = onClick)
+    ) {
+        Text(symbol, fontSize = 38.sp, color = TextPrimary, fontWeight = FontWeight.Light)
     }
 }
 

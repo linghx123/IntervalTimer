@@ -103,7 +103,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun beep(long: Boolean) { tone.startTone(ToneGenerator.TONE_PROP_BEEP, if (long) 500 else 150) }
 
-    private fun setPhase(p: Phase) {
+    private fun enterPhase(p: Phase) {
         phase = p
         remaining = when (p) {
             Phase.PREP -> current.prep
@@ -121,13 +121,13 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     private fun next(): Boolean {
         val p = current
         when (phase) {
-            Phase.PREP -> setPhase(Phase.WORK)
+            Phase.PREP -> enterPhase(Phase.WORK)
             Phase.WORK -> when {
                 round >= p.sets && (p.skipLastRest || p.rest == 0) -> return finish()
-                p.rest > 0 -> setPhase(Phase.REST)
-                else -> { round++; setPhase(Phase.WORK) }
+                p.rest > 0 -> enterPhase(Phase.REST)
+                else -> { round++; enterPhase(Phase.WORK) }
             }
-            Phase.REST -> if (round >= p.sets) return finish() else { round++; setPhase(Phase.WORK) }
+            Phase.REST -> if (round >= p.sets) return finish() else { round++; enterPhase(Phase.WORK) }
             else -> return false
         }
         beep(true)
@@ -138,7 +138,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
         if (running) { job?.cancel(); running = false; return }
         if (phase == Phase.IDLE || phase == Phase.DONE) {
             round = 1
-            setPhase(if (current.prep > 0) Phase.PREP else Phase.WORK)
+            enterPhase(if (current.prep > 0) Phase.PREP else Phase.WORK)
         }
         running = true
         job = viewModelScope.launch {

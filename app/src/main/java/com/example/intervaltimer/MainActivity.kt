@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -209,6 +211,11 @@ private data class Scheme(val bg: Color, val fg: Color)
 
 @Composable
 fun TimerScreen(vm: TimerViewModel = viewModel()) {
+    // 启动页（UI 稿 5）：短暂展示品牌屏后进入主界面
+    var showSplash by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) { delay(1600); showSplash = false }
+    if (showSplash) { SplashScreen(); return }
+
     LocalView.current.keepScreenOn = vm.running
 
     val scheme = when (vm.phase) {
@@ -420,10 +427,10 @@ private fun RunningPanel(vm: TimerViewModel, scheme: Scheme, modifier: Modifier 
 private fun CountdownText(time: String, color: Color) {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val density = LocalDensity.current
-        val digitSlot = maxWidth * 0.2f
-        val colonSlot = maxWidth * 0.1f
-        // dp 推导转 sp 后再除以 fontScale：字号只由屏幕宽度决定
-        val fontSize = with(density) { (digitSlot / 0.9f).coerceAtMost(90.dp).toSp() } / density.fontScale
+        val digitSlot = maxWidth * 0.225f
+        val colonSlot = maxWidth * 0.08f
+        // 字号撑满槽位（数字宽 ≈ 0.7em），槽位紧贴还原 UI 稿的大数字效果
+        val fontSize = with(density) { (digitSlot / 0.7f).coerceAtMost(110.dp).toSp() } / density.fontScale
         Row(verticalAlignment = Alignment.CenterVertically) {
             time.forEach { c ->
                 Box(Modifier.width(if (c == ':') colonSlot else digitSlot), contentAlignment = Alignment.Center) {
@@ -431,6 +438,26 @@ private fun CountdownText(time: String, color: Color) {
                 }
             }
         }
+    }
+}
+
+/** 启动页（UI 稿 5）：深色底 + 圆环闪电图标 + 品牌名 */
+@Composable
+private fun SplashScreen() {
+    Column(
+        Modifier.fillMaxSize().background(Color(0xFF0E1116)).systemBarsPadding(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Image(
+            painter = painterResource(R.drawable.splash_icon),
+            contentDescription = null,
+            modifier = Modifier.size(110.dp)
+        )
+        Spacer(Modifier.height(28.dp))
+        Text("间歇计时器", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Spacer(Modifier.height(8.dp))
+        Text("INTERVAL TIMER", fontSize = 12.sp, color = Color(0xFF8E8E93), letterSpacing = 5.sp)
     }
 }
 

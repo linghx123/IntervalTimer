@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -395,9 +396,10 @@ private fun RunningPanel(vm: TimerViewModel, scheme: Scheme, modifier: Modifier 
                 color = scheme.fg, letterSpacing = 6.sp)
             Spacer(Modifier.height(8.dp))
             BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                // 字号由屏宽(dp)推导后转 sp：不随系统字体缩放，任何系统字体设置下都不会溢出
+                val countdownSize = with(LocalDensity.current) { (maxWidth / 2.8f).coerceAtMost(120.dp).toSp() }
                 Text(
-                    fmt(vm.remaining),
-                    fontSize = (min(maxWidth.value / 2.6f, 150f)).sp,
+                    fmt(vm.remaining), fontSize = countdownSize,
                     fontWeight = FontWeight.Bold, color = scheme.fg, maxLines = 1
                 )
             }

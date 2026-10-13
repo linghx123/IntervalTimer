@@ -7,7 +7,9 @@ import android.media.ToneGenerator
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -23,9 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -105,6 +107,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- 计时 ----------
     var phase by mutableStateOf(Phase.IDLE); private set
     var remaining by mutableIntStateOf(0); private set
+    var phaseTotal by mutableIntStateOf(0); private set  // 当前阶段总秒数，用于进度条
     var round by mutableIntStateOf(1); private set
     var running by mutableStateOf(false); private set
 
@@ -115,16 +118,33 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun enterPhase(p: Phase) {
         phase = p
-        remaining = when (p) {
+        val t = when (p) {
             Phase.PREP -> current.prep
             Phase.WORK -> current.work
             Phase.REST -> current.rest
             else -> 0
         }
+        remaining = t; phaseTotal = t
     }
 
+    /** 下一阶段预览：名称 to 时间，null 表示即将结束 */
+    val nextUp: Pair<String, String>?
+        get() {
+            val p = current
+            return when (phase) {
+                Phase.PREP -> "锻炼" to fmt(p.work)
+                Phase.WORK -> when {
+                    round >= p.sets && (p.skipLastRest || p.rest == 0) -> null
+                    p.rest > 0 -> "休息" to fmt(p.rest)
+                    else -> "第 ${round + 1} 组 锻炼" to fmt(p.work)
+                }
+                Phase.REST -> if (round >= p.sets) null else "第 ${round + 1} 组 锻炼" to fmt(p.work)
+                else -> null
+            }
+        }
+
     private fun finish(): Boolean {
-        phase = Phase.DONE; remaining = 0; running = false; beep(true); return false
+        phase = Phase.DONE; remaining = 0; phaseTotal = 0; running = false; beep(true); return false
     }
 
     /** 进入下一阶段，返回 false 表示全部结束 */
@@ -161,7 +181,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun reset() { job?.cancel(); running = false; phase = Phase.IDLE; remaining = 0; round = 1 }
+    fun reset() { job?.cancel(); running = false; phase = Phase.IDLE; remaining = 0; phaseTotal = 0; round = 1 }
 
     override fun onCleared() { tone.release() }
 }
@@ -173,182 +193,299 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val CardBg = Color(0xFF1E1E23)
-private val TextPrimary = Color(0xFFF5F5F5)
-private val TextDim = Color(0xFF9E9E9E)
+// ---------- 配色（按 UI 稿） ----------
+private val Lime = Color(0xFFC8F135)
+private val Blue = Color(0xFF2E5BFF)
+private val Amber = Color(0xFFFFB300)
+private val PageBg = Color(0xFF0A0A0D)
+private val CardBg = Color(0xFF17171B)
+private val BtnBg = Color(0xFF26262C)
+private val TextPrimary = Color(0xFFF5F5F7)
+private val TextDim = Color(0xFF8E8E93)
+
+/** 每个阶段的整屏配色：bg 底色 / fg 主文字色 */
+private data class Scheme(val bg: Color, val fg: Color)
 
 @Composable
 fun TimerScreen(vm: TimerViewModel = viewModel()) {
     LocalView.current.keepScreenOn = vm.running
 
-    val idle = vm.phase == Phase.IDLE
-    val bg = when (vm.phase) {
-        Phase.PREP -> Color(0xFFF9A825)
-        Phase.WORK -> Color(0xFF2E7D32)
-        Phase.REST -> Color(0xFF1565C0)
-        Phase.DONE -> Color(0xFF6A1B9A)
-        Phase.IDLE -> Color(0xFF121216)
+    val scheme = when (vm.phase) {
+        Phase.PREP -> Scheme(Amber, Color.Black)
+        Phase.WORK -> Scheme(Lime, Color.Black)
+        Phase.REST -> Scheme(Blue, Color.White)
+        Phase.DONE -> Scheme(PageBg, Lime)
+        Phase.IDLE -> Scheme(PageBg, TextPrimary)
     }
+    val idle = vm.phase == Phase.IDLE
 
-    Surface(Modifier.fillMaxSize(), color = bg) {
+    Surface(Modifier.fillMaxSize(), color = scheme.bg) {
         Column(Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 20.dp)) {
             if (idle) {
                 EditorPanel(vm, Modifier.weight(1f))
+                StartBar(vm)
             } else {
-                Column(
-                    Modifier.weight(1f).fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(vm.current.name, fontSize = 22.sp, color = Color.White.copy(alpha = 0.85f))
-                    Text(vm.phase.label, fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        // 倒计时字号随屏幕宽度缩放（"00:30" 约 2.5em 宽），小屏不溢出换行
-                        Text(
-                            fmt(vm.remaining),
-                            fontSize = (min(maxWidth.value / 2.7f, 120f)).sp,
-                            fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1
-                        )
-                    }
-                    if (vm.phase != Phase.DONE) {
-                        Text("第 ${vm.round} / ${vm.current.sets} 组", fontSize = 24.sp, color = Color.White.copy(alpha = 0.85f))
-                    }
-                }
-            }
-
-            if (idle) {
-                Column(Modifier.padding(top = 8.dp, bottom = 12.dp)) {
-                    Button(
-                        onClick = vm::toggle,
-                        modifier = Modifier.fillMaxWidth().height(72.dp),
-                        shape = RoundedCornerShape(36.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
-                    ) {
-                        Text("开始锻炼", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.weight(1f))
-                        Text(fmt(vm.current.totalSeconds), fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    if (vm.presets.size > 1) {
-                        TextButton(onClick = vm::deletePreset, modifier = Modifier.fillMaxWidth()) {
-                            Text("删除当前方案", fontSize = 14.sp, color = TextDim)
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally)
-                ) {
-                    Button(
-                        onClick = vm::toggle,
-                        modifier = Modifier.height(64.dp),
-                        shape = RoundedCornerShape(32.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
-                    ) {
-                        Text(if (vm.running) "暂停" else if (vm.phase == Phase.DONE) "开始" else "继续", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    OutlinedButton(
-                        onClick = vm::reset,
-                        modifier = Modifier.height(64.dp),
-                        shape = RoundedCornerShape(32.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                    ) {
-                        Text("重置", fontSize = 20.sp)
-                    }
-                }
+                RunningPanel(vm, scheme, Modifier.weight(1f))
+                ControlsBar(vm, scheme)
             }
         }
     }
 }
 
-/** 编辑页：方案选择 + 参数卡片 */
+/** 编辑页（UI 稿 1）：标题 + 方案选择 + 总时长卡 + 2×2 参数卡 + 开关 */
 @Composable
 private fun EditorPanel(vm: TimerViewModel, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 16.dp)) {
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 24.dp)) {
+        Text("间歇计时器", fontSize = 13.sp, color = TextDim)
+        Text("选择方案", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+        Spacer(Modifier.height(16.dp))
+
         val p = vm.current
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), state = rememberLazyListState()) {
             itemsIndexed(vm.presets) { i, item ->
-                FilterChip(selected = i == vm.sel, onClick = { vm.select(i) }, label = { Text(item.name) })
+                FilterChip(
+                    selected = i == vm.sel,
+                    onClick = { vm.select(i) },
+                    label = {
+                        Text(item.name, fontWeight = FontWeight.SemiBold,
+                            color = if (i == vm.sel) Color.Black else TextPrimary)
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = CardBg, selectedContainerColor = Lime
+                    )
+                )
             }
-            item { AssistChip(onClick = vm::addPreset, label = { Text("＋ 新建") }) }
-        }
-        Spacer(Modifier.height(20.dp))
-        OutlinedTextField(
-            value = p.name, onValueChange = { vm.update(p.copy(name = it)) },
-            label = { Text("方案名称") }, singleLine = true, modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(20.dp))
-
-        StepperCard("组数", TextDim, "${p.sets}",
-            onMinus = { vm.update(p.copy(sets = (p.sets - 1).coerceAtLeast(1))) },
-            onPlus = { vm.update(p.copy(sets = p.sets + 1)) }
-        )
-        StepperCard("预备", Color(0xFFFFB74D), fmt(p.prep),
-            onMinus = { vm.update(p.copy(prep = (p.prep - 5).coerceAtLeast(0))) },
-            onPlus = { vm.update(p.copy(prep = p.prep + 5)) }
-        )
-        StepperCard("锻炼", Color(0xFF66BB6A), fmt(p.work),
-            onMinus = { vm.update(p.copy(work = (p.work - 5).coerceAtLeast(5))) },
-            onPlus = { vm.update(p.copy(work = p.work + 5)) }
-        )
-        StepperCard("休息", Color(0xFF64B5F6), fmt(p.rest),
-            onMinus = { vm.update(p.copy(rest = (p.rest - 5).coerceAtLeast(0))) },
-            onPlus = { vm.update(p.copy(rest = p.rest + 5)) }
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("跳过最后一次休息", fontSize = 16.sp, color = TextDim)
-                Switch(checked = p.skipLastRest, onCheckedChange = { vm.update(p.copy(skipLastRest = it)) })
+            item {
+                AssistChip(
+                    onClick = vm::addPreset,
+                    label = { Text("＋ 新建", color = TextDim) },
+                    colors = AssistChipDefaults.assistChipColors(containerColor = Color.Transparent)
+                )
             }
         }
-        Spacer(Modifier.height(4.dp))
-    }
-}
+        Spacer(Modifier.height(16.dp))
 
-/** 一张参数卡片：彩色标签 + 超大数值 + 左右加减 */
-@Composable
-private fun StepperCard(
-    label: String,
-    labelColor: Color,
-    value: String,
-    onMinus: () -> Unit,
-    onPlus: () -> Unit,
-    bottom: (@Composable ColumnScope.() -> Unit)? = null
-) {
-    Column(
-        Modifier.fillMaxWidth().padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(24.dp)).background(CardBg)
-    ) {
-        Text(
-            label, color = labelColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
-        )
+        // 总时长主卡
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).padding(20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
         ) {
-            StepButton("−", onMinus)
-            Text(
-                value, fontSize = 52.sp, fontWeight = FontWeight.Bold, color = TextPrimary,
-                textAlign = TextAlign.Center, modifier = Modifier.weight(1f)
-            )
-            StepButton("+", onPlus)
+            Column {
+                Text("总时长", fontSize = 13.sp, color = TextDim)
+                Text(fmt(p.totalSeconds), fontSize = 44.sp, fontWeight = FontWeight.Bold, color = Lime)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("${p.sets} 组", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text("练 ${fmt(p.work)} · 休 ${fmt(p.rest)}", fontSize = 12.sp, color = TextDim)
+            }
         }
-        if (bottom != null) bottom()
+        Spacer(Modifier.height(12.dp))
+
+        // 2×2 参数卡：预备按 1 秒步进，其余按 5 秒
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ParamCard("组数", "${p.sets}", Modifier.weight(1f),
+                onMinus = { vm.update(p.copy(sets = (p.sets - 1).coerceAtLeast(1))) },
+                onPlus = { vm.update(p.copy(sets = p.sets + 1)) })
+            ParamCard("锻炼", fmt(p.work), Modifier.weight(1f),
+                onMinus = { vm.update(p.copy(work = (p.work - 5).coerceAtLeast(5))) },
+                onPlus = { vm.update(p.copy(work = p.work + 5)) })
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ParamCard("休息", fmt(p.rest), Modifier.weight(1f),
+                onMinus = { vm.update(p.copy(rest = (p.rest - 5).coerceAtLeast(0))) },
+                onPlus = { vm.update(p.copy(rest = p.rest + 5)) })
+            ParamCard("预备", fmt(p.prep), Modifier.weight(1f),
+                onMinus = { vm.update(p.copy(prep = (p.prep - 1).coerceAtLeast(0))) },
+                onPlus = { vm.update(p.copy(prep = p.prep + 1)) })
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // 跳过最后一次休息
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("跳过最后一次休息", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text("最后一组结束后直接完成", fontSize = 12.sp, color = TextDim)
+            }
+            Switch(
+                checked = p.skipLastRest,
+                onCheckedChange = { vm.update(p.copy(skipLastRest = it)) },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = Lime, checkedThumbColor = Color.Black,
+                    uncheckedTrackColor = BtnBg, uncheckedThumbColor = TextDim
+                )
+            )
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun StepButton(symbol: String, onClick: () -> Unit) {
+private fun ParamCard(label: String, value: String, modifier: Modifier = Modifier, onMinus: () -> Unit, onPlus: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(20.dp)).background(CardBg).padding(16.dp)) {
+        Text(label, fontSize = 13.sp, color = TextDim)
+        Text(value, fontSize = 34.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.padding(top = 2.dp))
+        Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StepButton("−", onMinus, Modifier.weight(1f))
+            StepButton("+", onPlus, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun StepButton(symbol: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier.size(64.dp).clip(CircleShape).clickable(onClick = onClick)
+        modifier = modifier.height(44.dp).clip(RoundedCornerShape(14.dp)).background(BtnBg).clickable(onClick = onClick)
     ) {
-        Text(symbol, fontSize = 38.sp, color = TextPrimary, fontWeight = FontWeight.Light)
+        Text(symbol, fontSize = 22.sp, color = TextPrimary)
+    }
+}
+
+@Composable
+private fun StartBar(vm: TimerViewModel) {
+    Column(Modifier.padding(top = 8.dp, bottom = 16.dp)) {
+        Button(
+            onClick = vm::toggle,
+            modifier = Modifier.fillMaxWidth().height(60.dp),
+            shape = RoundedCornerShape(30.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Color.Black)
+        ) {
+            Text("▶  开始", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+        if (vm.presets.size > 1) {
+            TextButton(onClick = vm::deletePreset, modifier = Modifier.fillMaxWidth()) {
+                Text("删除当前方案", fontSize = 13.sp, color = TextDim)
+            }
+        }
+    }
+}
+
+/** 计时页（UI 稿 2/3）：顶部名称与组数 + 分段进度 + 大倒计时 + 下一阶段预览 */
+@Composable
+private fun RunningPanel(vm: TimerViewModel, scheme: Scheme, modifier: Modifier = Modifier) {
+    val p = vm.current
+    val fraction = if (vm.phaseTotal > 0) 1f - vm.remaining.toFloat() / vm.phaseTotal else 0f
+    val (completed, partial) = when (vm.phase) {
+        Phase.PREP -> 0 to fraction
+        Phase.WORK -> (vm.round - 1) to fraction
+        Phase.REST -> vm.round to 0f
+        else -> p.sets to 0f
+    }
+
+    Column(modifier.fillMaxWidth().padding(top = 20.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(p.name, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = scheme.fg)
+            if (vm.phase != Phase.DONE) {
+                Text("第 ${vm.round}/${p.sets} 组", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = scheme.fg)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Segments(total = p.sets, completed = completed, partial = partial, fg = scheme.fg)
+
+        Column(
+            Modifier.weight(1f).fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(vm.phase.label, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                color = scheme.fg, letterSpacing = 6.sp)
+            Spacer(Modifier.height(8.dp))
+            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    fmt(vm.remaining),
+                    fontSize = (min(maxWidth.value / 2.6f, 150f)).sp,
+                    fontWeight = FontWeight.Bold, color = scheme.fg, maxLines = 1
+                )
+            }
+        }
+
+        // 下一阶段预览
+        vm.nextUp?.let { (name, time) ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (vm.phase == Phase.REST) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.12f))
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("下一阶段", fontSize = 14.sp, color = scheme.fg.copy(alpha = 0.7f))
+                Text("$name  $time", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = scheme.fg)
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** 每组一格的分段进度条 */
+@Composable
+private fun Segments(total: Int, completed: Int, partial: Float, fg: Color) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        repeat(total) { i ->
+            val fill = when {
+                i < completed -> 1f
+                i == completed && partial > 0f -> partial.coerceIn(0f, 1f)
+                else -> 0f
+            }
+            Box(
+                Modifier.weight(1f).height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)).background(fg.copy(alpha = 0.25f))
+            ) {
+                Box(
+                    Modifier.fillMaxHeight()
+                        .fillMaxWidth(fill)
+                        .clip(RoundedCornerShape(3.dp)).background(fg)
+                )
+            }
+        }
+    }
+}
+
+/** 底部控制：重置 + 播放/暂停 */
+@Composable
+private fun ControlsBar(vm: TimerViewModel, scheme: Scheme) {
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(56.dp).clip(CircleShape)
+                .border(2.dp, scheme.fg.copy(alpha = 0.8f), CircleShape).clickable(onClick = vm::reset)
+        ) {
+            Text("↺", fontSize = 26.sp, color = scheme.fg)
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(84.dp).clip(CircleShape).background(scheme.fg).clickable(onClick = vm::toggle)
+        ) {
+            if (vm.running) PauseGlyph(scheme.bg) else PlayGlyph(scheme.bg)
+        }
+    }
+}
+
+@Composable
+private fun PauseGlyph(color: Color) {
+    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Box(Modifier.size(width = 8.dp, height = 26.dp).clip(RoundedCornerShape(2.dp)).background(color))
+        Box(Modifier.size(width = 8.dp, height = 26.dp).clip(RoundedCornerShape(2.dp)).background(color))
+    }
+}
+
+@Composable
+private fun PlayGlyph(color: Color) {
+    Canvas(Modifier.size(26.dp)) {
+        val path = Path().apply {
+            moveTo(2f, 0f)
+            lineTo(size.width, size.height / 2)
+            lineTo(2f, size.height)
+            close()
+        }
+        drawPath(path, color)
     }
 }
 

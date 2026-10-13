@@ -395,14 +395,7 @@ private fun RunningPanel(vm: TimerViewModel, scheme: Scheme, modifier: Modifier 
             Text(vm.phase.label, fontSize = 22.sp, fontWeight = FontWeight.Bold,
                 color = scheme.fg, letterSpacing = 6.sp)
             Spacer(Modifier.height(8.dp))
-            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                // 字号由屏宽(dp)推导后转 sp：不随系统字体缩放，任何系统字体设置下都不会溢出
-                val countdownSize = with(LocalDensity.current) { (maxWidth / 2.8f).coerceAtMost(120.dp).toSp() }
-                Text(
-                    fmt(vm.remaining), fontSize = countdownSize,
-                    fontWeight = FontWeight.Bold, color = scheme.fg, maxLines = 1
-                )
-            }
+            CountdownText(fmt(vm.remaining), scheme.fg)
         }
 
         // 下一阶段预览
@@ -419,6 +412,25 @@ private fun RunningPanel(vm: TimerViewModel, scheme: Scheme, modifier: Modifier 
             }
         }
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** 倒计时：逐字符定宽槽位 + 字号抵消系统字体缩放，任何设备上都不会重叠溢出 */
+@Composable
+private fun CountdownText(time: String, color: Color) {
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        val density = LocalDensity.current
+        val digitSlot = maxWidth * 0.2f
+        val colonSlot = maxWidth * 0.1f
+        // dp 推导转 sp 后再除以 fontScale：字号只由屏幕宽度决定
+        val fontSize = with(density) { (digitSlot / 0.9f).coerceAtMost(90.dp).toSp() } / density.fontScale
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            time.forEach { c ->
+                Box(Modifier.width(if (c == ':') colonSlot else digitSlot), contentAlignment = Alignment.Center) {
+                    Text(c.toString(), fontSize = fontSize, fontWeight = FontWeight.Bold, color = color, maxLines = 1)
+                }
+            }
+        }
     }
 }
 

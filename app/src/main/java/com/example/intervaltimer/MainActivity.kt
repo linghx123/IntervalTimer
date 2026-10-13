@@ -34,6 +34,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.min
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -201,7 +202,14 @@ fun TimerScreen(vm: TimerViewModel = viewModel()) {
                 ) {
                     Text(vm.current.name, fontSize = 22.sp, color = Color.White.copy(alpha = 0.85f))
                     Text(vm.phase.label, fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    Text(fmt(vm.remaining), fontSize = 120.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        // 倒计时字号随屏幕宽度缩放（"00:30" 约 2.5em 宽），小屏不溢出换行
+                        Text(
+                            fmt(vm.remaining),
+                            fontSize = (min(maxWidth.value / 2.7f, 120f)).sp,
+                            fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1
+                        )
+                    }
                     if (vm.phase != Phase.DONE) {
                         Text("第 ${vm.round} / ${vm.current.sets} 组", fontSize = 24.sp, color = Color.White.copy(alpha = 0.85f))
                     }

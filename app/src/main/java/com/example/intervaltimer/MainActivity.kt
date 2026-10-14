@@ -129,7 +129,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun beep(long: Boolean) { tone.startTone(ToneGenerator.TONE_PROP_BEEP, if (long) 500 else 150) }
 
-    private fun setRunning(b: Boolean) {
+    private fun setTimerRunning(b: Boolean) {
         running = b
         if (b) { if (!wake.isHeld) wake.acquire() } else if (wake.isHeld) wake.release()
     }
@@ -163,7 +163,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     private fun finish(): Boolean {
-        phase = Phase.DONE; remaining = 0; phaseTotal = 0; setRunning(false); beep(true); return false
+        phase = Phase.DONE; remaining = 0; phaseTotal = 0; setTimerRunning(false); beep(true); return false
     }
 
     /** 进入下一阶段，返回 false 表示全部结束 */
@@ -184,14 +184,14 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggle() {
-        if (running) { job?.cancel(); setRunning(false); return }
+        if (running) { job?.cancel(); setTimerRunning(false); return }
         if (phase == Phase.IDLE || phase == Phase.DONE) {
             round = 1
             enterPhase(if (current.prep > 0) Phase.PREP else Phase.WORK)
         } else {
             phaseEnd = SystemClock.elapsedRealtime() + remaining * 1000L  // 暂停后从剩余处接着走
         }
-        setRunning(true)
+        setTimerRunning(true)
         job = viewModelScope.launch {
             while (true) {
                 val left = phaseEnd - SystemClock.elapsedRealtime()
@@ -209,7 +209,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun reset() { job?.cancel(); setRunning(false); phase = Phase.IDLE; remaining = 0; phaseTotal = 0; round = 1 }
+    fun reset() { job?.cancel(); setTimerRunning(false); phase = Phase.IDLE; remaining = 0; phaseTotal = 0; round = 1 }
 
     override fun onCleared() { if (wake.isHeld) wake.release(); tone.release() }
 }

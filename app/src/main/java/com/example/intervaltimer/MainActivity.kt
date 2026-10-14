@@ -5,6 +5,8 @@ import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.PowerManager
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
@@ -71,6 +73,10 @@ data class Preset(
 
 class TimerViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("timer", Context.MODE_PRIVATE)
+    // shortcut: 只挡 CPU 休眠，切到别的 App 后进程仍可能被系统冻结（提示音停摆、时间靠下一条兜底校正）；
+    // 要做到真正后台不间断需改前台服务，出现用户投诉再升级
+    private val wake = app.getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "intervaltimer:timer")
 
     // ---------- 方案管理 ----------
     val presets = mutableStateListOf<Preset>()
@@ -101,7 +107,10 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun select(i: Int) { sel = i; save() }
     fun update(p: Preset) { presets[sel] = p; save() }
-    fun addPreset() { presets.add(Preset("新方案")); sel = presets.lastIndex; save() }
+    fun rename(name: String) {
+        name.trim().takeIf { it.isNotEmpty() }?.let { update(current.copy(name = it)) }
+    }
+    fun addPreset() { presets.add(Preset("新方案 ${presets.size + 1}")); sel = presets.lastIndex; save() }
     fun deletePreset() {
         if (presets.size <= 1) return
         presets.removeAt(sel); sel = sel.coerceAtMost(presets.lastIndex); save()
@@ -115,9 +124,15 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     var running by mutableStateOf(false); private set
 
     private var job: Job? = null
+    private var phaseEnd = 0L  // 当前阶段结束时刻（elapsedRealtime 毫秒）：倒计时由它反推，不用累加，后台停摆多久都不漂移
     private val tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
 
     private fun beep(long: Boolean) { tone.startTone(ToneGenerator.TONE_PROP_BEEP, if (long) 500 else 150) }
+
+    private fun setRunning(b: Boolean) {
+        running = b
+        if (b) { if (!wake.isHeld) wake.acquire() } else if (wake.isHeld) wake.release()
+    }
 
     private fun enterPhase(p: Phase) {
         phase = p
@@ -128,6 +143,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
             else -> 0
         }
         remaining = t; phaseTotal = t
+        phaseEnd = SystemClock.elapsedRealtime() + t * 1000L
     }
 
     /** 下一阶段预览：名称 to 时间，null 表示即将结束 */
@@ -147,7 +163,7 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     private fun finish(): Boolean {
-        phase = Phase.DONE; remaining = 0; phaseTotal = 0; running = false; beep(true); return false
+        phase = Phase.DONE; remaining = 0; phaseTotal = 0; setRunning(false); beep(true); return false
     }
 
     /** 进入下一阶段，返回 false 表示全部结束 */
@@ -168,25 +184,34 @@ class TimerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggle() {
-        if (running) { job?.cancel(); running = false; return }
+        if (running) { job?.cancel(); setRunning(false); return }
         if (phase == Phase.IDLE || phase == Phase.DONE) {
             round = 1
             enterPhase(if (current.prep > 0) Phase.PREP else Phase.WORK)
+        } else {
+            phaseEnd = SystemClock.elapsedRealtime() + remaining * 1000L  // 暂停后从剩余处接着走
         }
-        running = true
+        setRunning(true)
         job = viewModelScope.launch {
             while (true) {
-                delay(1000)
-                remaining--
-                if (remaining in 1..3) beep(false)
-                if (remaining <= 0 && !next()) break
+                val left = phaseEnd - SystemClock.elapsedRealtime()
+                if (left <= 0) {
+                    // 停摆期间可能已跨过整个阶段：把超出的时间顺延给下一阶段，连续补齐直到追上当前时刻
+                    if (!next()) break
+                    phaseEnd += -left
+                    continue
+                }
+                val sec = ((left + 999) / 1000).toInt()
+                remaining = sec
+                if (sec in 1..3) beep(false)
+                delay(left - (sec - 1) * 1000L)  // 只睡到下一秒边界
             }
         }
     }
 
-    fun reset() { job?.cancel(); running = false; phase = Phase.IDLE; remaining = 0; phaseTotal = 0; round = 1 }
+    fun reset() { job?.cancel(); setRunning(false); phase = Phase.IDLE; remaining = 0; phaseTotal = 0; round = 1 }
 
-    override fun onCleared() { tone.release() }
+    override fun onCleared() { if (wake.isHeld) wake.release(); tone.release() }
 }
 
 class MainActivity : ComponentActivity() {
@@ -355,6 +380,7 @@ private fun StepButton(symbol: String, onClick: () -> Unit, modifier: Modifier =
 
 @Composable
 private fun StartBar(vm: TimerViewModel) {
+    var renaming by remember { mutableStateOf(false) }
     Column(Modifier.padding(top = 8.dp, bottom = 16.dp)) {
         Button(
             onClick = vm::toggle,
@@ -364,12 +390,43 @@ private fun StartBar(vm: TimerViewModel) {
         ) {
             Text("▶  开始", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
-        if (vm.presets.size > 1) {
-            TextButton(onClick = vm::deletePreset, modifier = Modifier.fillMaxWidth()) {
-                Text("删除当前方案", fontSize = 13.sp, color = TextDim)
+        Row(Modifier.fillMaxWidth()) {
+            TextButton(onClick = { renaming = true }, modifier = Modifier.weight(1f)) {
+                Text("重命名方案", fontSize = 13.sp, color = TextDim)
+            }
+            if (vm.presets.size > 1) {
+                TextButton(onClick = vm::deletePreset, modifier = Modifier.weight(1f)) {
+                    Text("删除当前方案", fontSize = 13.sp, color = TextDim)
+                }
             }
         }
     }
+    if (renaming) {
+        RenameDialog(
+            initial = vm.current.name,
+            onDismiss = { renaming = false },
+            onConfirm = { vm.rename(it); renaming = false }
+        )
+    }
+}
+
+@Composable
+private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("方案名称") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(text) }) { Text("确定", color = Lime) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextDim) } }
+    )
 }
 
 /** 计时页（UI 稿 2/3）：顶部名称与组数 + 分段进度 + 大倒计时 + 下一阶段预览 */

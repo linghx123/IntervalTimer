@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 计时期间持部分唤醒锁，否则锁屏后 CPU 休眠，倒计时与提示音都会停摆 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
         android:label="间歇计时器"
         android:icon="@mipmap/ic_launcher"
